@@ -1,0 +1,205 @@
+---
+title: "Capstone Milestone Report 1"
+author: "Zach Dungan"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Milestone Report #1
+
+The purpose of this report is to showcase the ability to load in the data, explore the entire datasets, and then begin the process of building out the predictive model. 
+
+## Set working directory, load in packages and load in data
+```{r, warning=FALSE, error=FALSE, message=FALSE}
+setwd("~/R/Coursera/coursera-capstone")
+
+library(R.utils)
+library(tidytext)
+library(ngram)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(gridExtra)
+library(tm)
+
+twitter <- readLines("en_US.twitter.txt")
+news <- readLines("en_US.news.txt")
+blogs <- readLines("en_US.blogs.txt")
+```
+
+## Exploratory Analysis
+
+Count words and lines
+```{r}
+# Get and plot word counts
+twitter_wc <- wordcount(twitter, sep = " ")
+news_wc <- wordcount(news, sep = " ")
+blogs_wc <- wordcount(blogs, sep = " ")
+
+df_wc <- data.frame(text = c("Twitter", "News", "Blogs"), word_count = c(twitter_wc, news_wc, blogs_wc))
+
+plot_wc <- ggplot(data = df_wc, aes(x = text, y = word_count, fill = text)) + 
+  geom_bar(stat = "identity") + 
+  xlab("Text Type") +
+  ylab("Word Count") + 
+  scale_y_continuous(labels = comma)
+plot_wc
+
+# Get and plot line counts
+twitter_lc <- length(twitter)
+news_lc <- length(news)
+blogs_lc <- length(blogs)
+
+df_lc <- data.frame(text = c("Twitter", "News", "Blogs"), line_count = c(twitter_lc, news_lc, blogs_lc))
+
+plot_lc <- ggplot(data = df_lc, aes(x = text, y = line_count, fill = text)) + 
+  geom_bar(stat = "identity") + 
+  xlab("Text Type") +
+  ylab("Line Count") + 
+  scale_y_continuous(labels = comma)
+plot_lc
+```
+
+Sample out the data and export for further use. I chose to sample 10% of the data since it still gives a reasonable amount of text to work with. 
+*I also removed punction here after seeing it affect the data sets downstream (the TM package worked for this)
+
+```{r}
+set.seed(2023)
+
+twt <- sample(twitter, floor(0.10*twitter_lc))
+nws <- sample(news, floor(0.10*news_lc))
+blg <- sample(blogs, floor(0.10*blogs_lc))
+
+twt<- twt %>% 
+  removeNumbers() %>% 
+  removePunctuation()
+
+nws <- nws %>% 
+  removeNumbers() %>% 
+  removePunctuation()
+
+blg <- blg %>% 
+  removeNumbers() %>% 
+  removePunctuation()
+
+write.table(twt, file="twt.txt", row.names=FALSE, col.names=FALSE)
+write.table(nws, file="nws.txt", row.names=FALSE, col.names=FALSE)
+write.table(blg, file="blg.txt", row.names=FALSE, col.names=FALSE)
+```
+
+## Explore the sampled data
+
+Main goals: Tokenize the data and look for anything interesting. 
+
+At this point, I cleared up the global environment and used the sampled data going forward (faster to load in)
+```{r}
+rm(list = ls())
+
+# Load in data as dataframes
+twt <- read.table("twt.txt")
+nws <- read.table("nws.txt")
+blg <- read.table("blg.txt")
+```
+
+Tokenize the data
+
+```{r}
+token_twt <- twt %>%
+  unnest_tokens(word, V1)
+token_nws <- nws %>%
+  unnest_tokens(word, V1)
+token_blg <- blg %>%
+  unnest_tokens(word, V1)
+```
+
+Look at top 15 most used words in each dataset
+
+```{r}
+p1 <- token_twt %>%
+  count(word, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+  labs(y = "Frequency",
+       x = "words",
+       title = "Twitter Sample")
+
+p2 <- token_nws %>%
+  count(word, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+  labs(y = "Frequency",
+       x = "words",
+       title = "News Sample")
+
+p3 <- token_blg %>%
+  count(word, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+  labs(y = "Frequency",
+       x = "words",
+       title = "Blog Sample")
+
+grid.arrange(p1, p2, p3, ncol = 3)
+```
+
+This isn't super helpful, as all of these words are stop words (the, and, but, etc). We can remove these if we wanted to, but since this model is about predictive text, we want to keep them in. 
+
+We'll merge the three datasets together and tokenize it. Here we'll also look at frequencies of two and three word combinations (N grams). This will help whem building a predictive model, since we can see what words come before and after each other. 
+
+```{r}
+m_data <- rbind(twt, nws, blg)
+
+token_merge <- m_data %>%
+  unnest_tokens(word, V1)
+
+token_merge_2 <- m_data %>%
+  unnest_tokens(words, V1, token = "ngrams", n = 2)
+
+token_merge_3 <- m_data %>%
+  unnest_tokens(words, V1, token = "ngrams", n = 3)
+
+p4 <- token_merge_2 %>%
+  count(words, sort = TRUE) %>%
+  top_n(10) %>%
+  mutate(words = reorder(words, n)) %>%
+  ggplot(aes(x = words, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+  labs(y = "Frequency",
+       title = "N Grams = 2")
+
+p5 <- token_merge_3 %>%
+  count(words, sort = TRUE) %>%
+  top_n(10) %>%
+  mutate(words = reorder(words, n)) %>%
+  ggplot(aes(x = words, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+  labs(y = "Frequency",
+       title = "N Grams = 3")
+
+grid.arrange(p4, p5, ncol = 2)
+```
+
+Unsurprising on the frequency of the word combinations, especially for the N Gram = 2. 
+
+## Next Steps: 
+* Build out a prediction model 
+* Work on optimizing it (better memory usage)
